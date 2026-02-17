@@ -1,0 +1,23 @@
+name: Start Dishwasher
+
+on:
+  workflow_dispatch:
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - run: python start_dishwasher.py
+        env:
+          HC_CLIENT_ID: ${{ secrets.HC_CLIENT_ID }}
+          HC_CLIENT_SECRET: ${{ secrets.HC_CLIENT_SECRET }}
+          HC_REFRESH_TOKEN: ${{ secrets.HC_REFRESH_TOKEN }}
+          HC_HAID: ${{ secrets.HC_HAID }}
