@@ -19,6 +19,7 @@ ISRAEL_TZ = timezone(timedelta(hours=2))
 ISRAEL_DST_TZ = timezone(timedelta(hours=3))
 
 FINISH_HOUR = 6  # 06:00 AM Israel time
+PROGRAM_KEY = "Dishcare.Dishwasher.Program.Auto2"
 
 
 def get_israel_tz() -> timezone:
@@ -42,22 +43,51 @@ def get_israel_tz() -> timezone:
     return ISRAEL_TZ
 
 
-def compute_finish_in_seconds() -> int:
-    """Compute seconds from now until tomorrow 06:00 Israel time."""
+def get_program_duration(access_token: str, ha_id: str) -> int:
+    """Query the estimated duration for the program in seconds."""
+    url = f"{BASE_URL}/api/homeappliances/{ha_id}/programs/available/{PROGRAM_KEY}"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": CONTENT_TYPE,
+    }
+    log(f"GET {url}")
+    resp = requests.get(url, headers=headers)
+    log(f"Response {resp.status_code}")
+    log(f"Response body: {resp.text}")
+    if resp.status_code != 200:
+        log("FATAL: Could not fetch program details to determine duration.")
+        raise SystemExit(1)
+    data = resp.json()
+    for option in data.get("data", {}).get("options", []):
+        if option.get("key") == "BSH.Common.Option.EstimatedTotalProgramTime":
+            duration = option["value"]
+            log(f"Estimated program duration: {duration}s ({duration // 3600}h {(duration % 3600) // 60}m)")
+            return duration
+    log("FATAL: EstimatedTotalProgramTime not found in program options.")
+    raise SystemExit(1)
+
+
+def compute_start_in_seconds(program_duration: int) -> int:
+    """Compute seconds from now until the dishwasher should start, so it finishes at 06:00 Israel time tomorrow."""
     tz = get_israel_tz()
     now_israel = datetime.now(tz)
     tomorrow_finish = now_israel.replace(
         hour=FINISH_HOUR, minute=0, second=0, microsecond=0
     ) + timedelta(days=1)
-    delta = tomorrow_finish - now_israel
+    start_time = tomorrow_finish - timedelta(seconds=program_duration)
+    delta = start_time - now_israel
     seconds = int(delta.total_seconds())
     log(f"Now (Israel): {now_israel.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     log(f"Finish target: {tomorrow_finish.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    log(f"FinishInRelative: {seconds}s ({seconds // 3600}h {(seconds % 3600) // 60}m)")
+    log(f"Program duration: {program_duration}s → Start at: {start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    log(f"StartInRelative: {seconds}s ({seconds // 3600}h {(seconds % 3600) // 60}m)")
+    if seconds < 0:
+        log("FATAL: Computed start time is in the past. The program would not finish by the target time.")
+        raise SystemExit(1)
     return seconds
 
 
-def start_program(access_token: str, ha_id: str, finish_in_seconds: int) -> requests.Response:
+def start_program(access_token: str, ha_id: str, start_in_seconds: int) -> requests.Response:
     url = f"{BASE_URL}/api/homeappliances/{ha_id}/programs/active"
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -66,15 +96,15 @@ def start_program(access_token: str, ha_id: str, finish_in_seconds: int) -> requ
     }
     body = {
         "data": {
-            "key": "Dishcare.Dishwasher.Program.Auto2",
+            "key": PROGRAM_KEY,
             "options": [
                 {
                     "key": "Dishcare.Dishwasher.Option.ExtraDry",
                     "value": True,
                 },
                 {
-                    "key": "BSH.Common.Option.FinishInRelative",
-                    "value": finish_in_seconds,
+                    "key": "BSH.Common.Option.StartInRelative",
+                    "value": start_in_seconds,
                     "unit": "seconds",
                 },
             ],
@@ -92,15 +122,16 @@ def start_program(access_token: str, ha_id: str, finish_in_seconds: int) -> requ
 def main() -> None:
     client_id, client_secret, refresh_token, ha_id = load_env()
 
-    finish_in_seconds = compute_finish_in_seconds()
-
     log("Refreshing access token...")
     access_token = refresh_access_token(client_id, client_secret, refresh_token)
     log("Token refreshed successfully.")
 
+    program_duration = get_program_duration(access_token, ha_id)
+    start_in_seconds = compute_start_in_seconds(program_duration)
+
     run_with_retries(
-        action=lambda: start_program(access_token, ha_id, finish_in_seconds),
-        success_msg="Dishwasher program started (delayed finish)!",
+        action=lambda: start_program(access_token, ha_id, start_in_seconds),
+        success_msg="Dishwasher program scheduled (delayed start)!",
         check_remote_start=True,
     )
 
