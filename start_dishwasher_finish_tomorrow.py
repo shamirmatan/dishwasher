@@ -20,6 +20,7 @@ ISRAEL_DST_TZ = timezone(timedelta(hours=3))
 
 FINISH_HOUR = 6  # 06:00 AM Israel time
 PROGRAM_KEY = "Dishcare.Dishwasher.Program.Auto2"
+PROGRAM_DURATION_SECONDS = 2 * 3600 + 15 * 60  # 2h15m
 
 
 def get_israel_tz() -> timezone:
@@ -41,30 +42,6 @@ def get_israel_tz() -> timezone:
     if dst_start <= now < dst_end:
         return ISRAEL_DST_TZ
     return ISRAEL_TZ
-
-
-def get_program_duration(access_token: str, ha_id: str) -> int:
-    """Query the estimated duration for the program in seconds."""
-    url = f"{BASE_URL}/api/homeappliances/{ha_id}/programs/available/{PROGRAM_KEY}"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": CONTENT_TYPE,
-    }
-    log(f"GET {url}")
-    resp = requests.get(url, headers=headers)
-    log(f"Response {resp.status_code}")
-    log(f"Response body: {resp.text}")
-    if resp.status_code != 200:
-        log("FATAL: Could not fetch program details to determine duration.")
-        raise SystemExit(1)
-    data = resp.json()
-    for option in data.get("data", {}).get("options", []):
-        if option.get("key") == "BSH.Common.Option.EstimatedTotalProgramTime":
-            duration = option["value"]
-            log(f"Estimated program duration: {duration}s ({duration // 3600}h {(duration % 3600) // 60}m)")
-            return duration
-    log("FATAL: EstimatedTotalProgramTime not found in program options.")
-    raise SystemExit(1)
 
 
 def compute_start_in_seconds(program_duration: int) -> int:
@@ -126,8 +103,7 @@ def main() -> None:
     access_token = refresh_access_token(client_id, client_secret, refresh_token)
     log("Token refreshed successfully.")
 
-    program_duration = get_program_duration(access_token, ha_id)
-    start_in_seconds = compute_start_in_seconds(program_duration)
+    start_in_seconds = compute_start_in_seconds(PROGRAM_DURATION_SECONDS)
 
     run_with_retries(
         action=lambda: start_program(access_token, ha_id, start_in_seconds),
